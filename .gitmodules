@@ -1,0 +1,3 @@
+[submodule "javascript/d3"]
+	path = javascript/d3
+	url = https://github.com/mbostock/d3.git

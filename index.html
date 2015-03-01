@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<meta http-equiv="cache-control" content="max-age=0" />
+<meta http-equiv="cache-control" content="no-cache" />
+<meta http-equiv="expires" content="0" />
+<meta http-equiv="expires" content="Tue, 01 Jan 1980 1:00:00 GMT" />
+<meta http-equiv="pragma" content="no-cache" />
+
+<script src="http://code.jquery.com/jquery-1.11.2.min.js"></script>
+
+<script type="text/javascript" src="javascript/d3/d3.min.js"></script>
+<script src="http://bl.ocks.org/ZJONSSON/raw/3918369/d3.legend.js"></script>
+
+<script type="text/javascript">
+  $(function(){
+      $('#datepicker1').AnyTime_picker( 
+        { format: "%Z-%m-%d %H:%i:%s", firstDOW: 1 } );
+      $('#datepicker2').AnyTime_picker( 
+        { format: "%Z-%m-%d %H:%i:%s", firstDOW: 1 } );
+  });
+</script>
+
+<style>
+
+path {
+    fill: none;
+}
+.grid .tick {
+    stroke: #CCC;
+    opacity: 0.7;
+}
+.grid path {
+    stroke-width: 0;
+}
+.axis path, .axis line {
+    fill: none;
+    stroke: black;
+}
+line {
+    shape-rendering: crispEdges;
+}
+.brush .extent {
+    stroke: #fff;
+    fill-opacity: 0.125;
+    shape-rendering: crispEdges;
+}
+.overlay {
+    fill: none;
+    pointer-events: all;
+}
+.hover-line { 
+    stroke: #CCC;  
+    fill: none;
+    stroke-width: 1px;
+}
+.hover-text {
+    stroke: #000;
+    font: 10px sans-serif;
+}
+.legend rect {
+    fill:white;
+    stroke:black;
+    opacity:0.8;
+}
+.x.axis .tick line {
+    stroke: #ccc;
+}
+
+</style>
+<body>
+
+<div id="container"></div>
+
+<script>
+
+var dataset = (function() {
+        var json = null;
+        $.ajax({
+            'async': false,
+            'global': false,
+            'url': "data.json",
+            'dataType': "json",
+            'success': function (data) {
+                json = data;
+            }
+        });
+        return json;
+})();
+
+//config
+//var parseDate = d3.time.format("%Y-%m-%d %H:%M:%S").parse; 
+var parseDate = d3.time.format("%d/%m/%Y %H:%M:%S").parse;
+var format = d3.time.format('%b %d %Y');
+
+var margin = {
+    top: 20,
+    right: 80,
+    bottom: 140,
+    left: 50
+},
+margin2 = {
+    top: 400,
+    right: 80,
+    bottom: 25,
+    left: 50
+};
+
+var w = 900 - margin.left - margin.right,
+    h = 500 - margin.top - margin.bottom,
+    h2 = 500 - margin2.top - margin2.bottom;
+
+// init function
+var bisectDate = d3.bisector(function (d) {
+    return d.date;
+}).left;
+
+// parse dataset
+dataset.forEach(function (d) {
+    d.date = parseDate(d.date);
+});
+
+//create svg container
+var svg = d3.select('#container').append('svg')
+    .attr('class', 'graph')
+    .attr('width', w + margin.left + margin.right)
+    .attr('height', h + margin.top + margin.bottom);
+
+svg.append('defs').append('clipPath')
+    .attr('id', 'clip')
+    .append('rect')
+    .attr('width', w)
+    .attr('height', h);
+
+//define main drawing area
+var main = svg.append('g')
+    .attr('transform', 'translate(' + margin.left + ',' + margin.top + ')');
+
+//define zoom area
+var mini = svg.append('g')
+    .attr('transform', 'translate(' + margin2.left + ',' + margin2.top + ')');
+
+//create colors
+var colour = d3.scale.category10()
+    .domain(d3.keys(dataset[0]).filter(function (k) {
+    return k !== 'date';
+}));
+
+var sets = colour.domain().map(function (name) {
+    return {
+        name: name,
+        values: dataset.map(function (d) {
+            return {
+                date: d.date,
+                value: d[name]
+            };
+        })
+    };
+});
+
+// define scales
+var x_main = d3.time.scale()
+    .range([0, w])
+    .domain(d3.extent(dataset, function (d) {
+    return d.date;
+}));
+var x_mini = d3.time.scale()
+    .range([0, w])
+    .domain(x_main.domain());
+
+var y_main = d3.scale.linear()
+    .range([h, 0])
+    .domain([
+d3.min(sets, function (s) {
+    return d3.min(s.values, function (v) {
+        return v.value;
+    });
+}),
+d3.max(sets, function (s) {
+    return d3.max(s.values, function (v) {
+        return v.value;
+    });
+})]);
+var y_mini = d3.scale.linear()
+    .range([h2, 0])
+    .domain(y_main.domain());
+
+// define axes
+var xAxis = d3.svg.axis()
+    .scale(x_main)
+    .orient('bottom')
+    .tickSize(-h, 0);
+var xAxis2 = d3.svg.axis().scale(x_mini).orient('bottom');
+var yAxis = d3.svg.axis()
+    .scale(y_main)
+    .orient('left');
+// .ticksize()
+
+// definde vertical hover line
+var hoverLineGroup = svg.append("g")
+          .attr("class", "hover-line");
+var hoverLine = hoverLineGroup
+  .append("line")
+    .attr("x1", 10).attr("x2", 10) 
+    .attr("y1", 0 + margin.top).attr("y2", h+margin.top); 
+  // Hide hover line by default.
+  hoverLine.style("opacity", 1e-6);
+
+// define hover date text
+var hoverDate = hoverLineGroup.append('text')
+   .attr("class", "hover-text")
+   .attr('y', 15);
+
+// define brush for zoom area
+var brush = d3.svg.brush()
+    .x(x_mini)
+    .on('brush', brush);
+
+function brush() {
+    x_main.domain(brush.empty() ? x_mini.domain() : brush.extent());
+    main.selectAll('path.line').attr('d', function (d) {
+        return line_main(d.values);
+    });
+    main.select('.x.axis').call(xAxis);
+}
+
+// define line generators
+var line_main = d3.svg.line()
+    .x(function (d) {
+    return x_main(d.date);
+})
+    .y(function (d) {
+    return y_main(d.value);
+});
+var line_mini = d3.svg.line()
+    .x(function (d) {
+    return x_mini(d.date);
+})
+    .y(function (d) {
+    return y_mini(d.value);
+});
+
+// draw axes
+main.append('g')
+    .attr('class', 'x axis')
+    .attr('transform', 'translate(0,' + h + ')')
+    .call(xAxis);
+
+main.append('g')
+    .attr('class', 'y axis')
+    .call(yAxis);
+
+mini.append('g')
+    .attr('class', 'x2 axis')
+    .attr('transform', 'translate(0,' + h2 + ')')
+    .call(xAxis2);
+
+// draw gridlines
+main.append('g').attr('id', 'hgrids')
+    .selectAll('line')
+    .data(y_main.ticks())
+    .enter()
+    .append('line')
+    .attr('x1', 0)
+    .attr('x2', w)
+    .attr('y1', y_main)
+    .attr('y2', y_main)
+    .style('stroke', '#ccc');
+
+//legend
+  legend = svg.append("g")
+    .attr("class","legend")
+    .attr("transform","translate(" + (w+40 ) + "," + (h+50) +")")
+    .style("font-size","6px")
+    .call(d3.legend)
+  setTimeout(function() { 
+    legend
+      .style("font-size","12px")
+      .attr("data-style-padding",10)
+      .call(d3.legend)
+  },1000)
+
+// draw paths in main area
+main.selectAll('path.line')
+    .data(sets)
+    .enter()
+    .append('path')
+    .attr('d', function (d) {
+    return line_main(d.values);
+})
+    .attr('class', 'line')
+    .attr('clip-path', 'url(#clip)')
+    .attr("data-legend",function(d) { return d.name})
+    .on("click", function(){
+       // Determine if current line is visible
+       var active   = redLine.active ? false : true ,
+       newOpacity = active ? 0 : 1;
+       // Hide or show the elements
+       d3.select("#redLine").style("opacity", newOpacity);
+       d3.select("#redAxis").style("opacity", newOpacity);
+       // Update whether or not the elements are active
+       redLine.active = active;
+      })
+    .style('stroke', function (d) {
+    return colour(d.name);
+});
+
+// draw paths in zoom area
+mini.selectAll('path.line')
+    .data(sets)
+    .enter()
+    .append('path')
+    .attr('d', function (d) {
+    return line_mini(d.values);
+})
+    .attr('class', 'line')
+    .style('stroke', function (d) {
+    return colour(d.name);
+});
+
+// draw brush
+mini.append('g')
+    .attr('class', 'brush')
+    .call(brush)
+    .selectAll('rect')
+    .attr('y', -6)
+    .attr('height', h2 + 7);
+
+// define focus
+var focus = main.append('g')
+    .attr('class', 'focus')
+    .style('display', 'none');
+
+// define circles
+var circles = focus.selectAll('circle')
+    .data(sets)
+    .enter()
+    .append('circle')
+    .attr('class', 'circle')
+    .attr('r', 4)
+    .attr('fill', 'none')
+    .attr('stroke', function (d) {
+    return colour(d.name);
+});
+
+// define overlay -> calls function mousemove 
+main.append('rect')
+    .attr('class', 'overlay')
+    .attr('width', w)
+    .attr('height', h)
+    .on('mouseover', function () {
+    focus.style('display', null);
+})
+    .on('mouseout', function () {
+    focus.style('display', 'none');
+})
+    .on('mousemove', mousemove);
+
+function mousemove() {
+/*
+    //debug
+    console.log('mouseover')
+    // mouse coordinate
+    console.log({"x": d3.event.x, "y": d3.event.y});
+
+    //dataset
+    console.log('mousemove', d3.mouse(this));
+    var m = d3.mouse(this);
+    console.log("x:"+m[0]+" y:"+m[1]);
+*/
+    //  mouse x position
+    var mouse_x = d3.mouse(this)[0];
+    var mouse_y = d3.mouse(this)[1];
+    var graph_y = y_main.invert(mouse_y);
+    var graph_x = x_main.invert(mouse_x);
+    //console.log("mouse_x:"+mouse_x);
+
+    //set hoverline x coordinates to mouse_x coordinates
+    hoverLine.attr("x1", mouse_x + margin.left).attr("x2", mouse_x + margin.left).style("opacity", 1);
+    //move hoverDate to mouse possition
+    hoverDate.attr('x', mouse_x);
+    //change test of hoverDate to Date below mouse cursor
+    hoverDate.text(graph_x);
+
+    //create circles around nearest values
+    //x0=time of cursor
+    //i=y value (heigh) of data point
+    //d0=left datapoint (time) relative to cursor
+    //d1=right datapoint (time) relative to cursor
+    //c=datapoint (x and y) that will be higlighted
+    var x0 = x_main.invert(d3.mouse(this)[0]),
+        i = bisectDate(dataset, x0, 1),
+        d0 = dataset[i - 1].date,
+        d1 = dataset[i].date,
+        c = x0 - d0 > d1 - x0 ? [d1, i] : [d0, i - 1];
+        console.log("x0:"+x0, "i:"+i, "d0:"+d0, "d1:"+d1, "c:"+c);
+
+    // move circles to datapoint
+    // function will be executed for each path
+    circles.attr('transform', function (d) {
+        console.log("value:"+d.values[c[1]].value);
+        return 'translate(' + x_main(c[0]) + ',' + y_main(d.values[c[1]].value) + ')'
+    });
+}
+</script>
+
+</body>
+</html>
+
